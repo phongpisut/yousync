@@ -5,6 +5,7 @@
     videoId,
     startTime = 0,
     isLive = false,
+    autoplay = 1,
     onReady = () => {},
     onReadyChange = () => {},
   } = $props()
@@ -23,7 +24,7 @@
       player = new YT.Player(container, {
         videoId,
         playerVars: {
-          autoplay: 1,
+          autoplay,
           mute: 1,
           start: Math.floor(startTime),
           rel: 0,

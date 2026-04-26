@@ -20,6 +20,7 @@ export interface ParsedHash {
   seed: number | null
   offset: number | null
   isLive: boolean
+  buffer: number
 }
 
 export function parseHash(): ParsedHash {
@@ -29,6 +30,7 @@ export function parseHash(): ParsedHash {
     seed: hash.has('s') ? parseInt(hash.get('s')!, 10) : null,
     offset: hash.has('o') ? parseFloat(hash.get('o')!) : null,
     isLive: hash.has('l'),
+    buffer: hash.has('b') ? parseFloat(hash.get('b')!) : 0,
   }
 }
 
@@ -37,14 +39,16 @@ export interface HashParams {
   seed?: number | null
   offset?: string | number | null
   isLive?: boolean
+  buffer?: number
 }
 
-export function buildShareHash({ videoId, seed, offset, isLive }: HashParams): string {
+export function buildShareHash({ videoId, seed, offset, isLive, buffer }: HashParams): string {
   const params = new URLSearchParams()
   if (videoId) params.set('v', videoId)
   if (seed != null) params.set('s', String(seed))
   if (offset != null) params.set('o', String(offset))
   if (isLive) params.set('l', '1')
+  if (buffer != null && buffer !== 0) params.set('b', String(buffer))
   return params.toString()
 }
 
@@ -97,11 +101,12 @@ export interface TargetParams {
   baseOffset: number
   isLive?: boolean
   getDuration?: () => number | undefined
+  buffer?: number
 }
 
-export function getTarget({ seed, baseOffset, isLive = false, getDuration }: TargetParams): number {
-  const elapsed = (now() - seed) / 1000
-  let target = baseOffset + elapsed
+export function getTarget({ seed, baseOffset, isLive = false, getDuration, buffer = 0 }: TargetParams): number {
+  const elapsed = Math.max(0, (now() - seed) / 1000)
+  let target = baseOffset + elapsed + buffer
 
   if (isLive && typeof getDuration === 'function') {
     const duration = getDuration()
@@ -115,4 +120,57 @@ export function getTarget({ seed, baseOffset, isLive = false, getDuration }: Tar
 
 export function getElapsedSeconds(seed: number): number {
   return (now() - seed) / 1000
+}
+
+export function parseYouTubeTime(input: string | null | undefined): number | null {
+  if (!input) return null
+  const trimmed = input.trim()
+
+  // Full URL with t= param
+  try {
+    const url = new URL(trimmed)
+    const t = url.searchParams.get('t')
+    if (t) {
+      const parsed = parseTimeString(t)
+      if (parsed != null) return parsed
+    }
+  } catch {
+    // not a URL
+  }
+
+  // Just a time string like "2m3s", "123", "02:03"
+  return parseTimeString(trimmed)
+}
+
+export function parseTimeString(str: string): number | null {
+  str = str.trim()
+
+  // plain seconds (e.g. "123")
+  if (/^\d+$/.test(str)) {
+    return parseInt(str, 10)
+  }
+
+  // YouTube-style duration (e.g. "1h2m3s", "2m3s", "1h", "30s")
+  const durationMatch = str.match(/^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s?)$/i)
+  if (durationMatch) {
+    const h = parseInt(durationMatch[1] || '0', 10)
+    const m = parseInt(durationMatch[2] || '0', 10)
+    const s = parseInt(durationMatch[3] || '0', 10)
+    return h * 3600 + m * 60 + s
+  }
+
+  // Colon-separated (e.g. "01:02:03", "02:03", "1:30")
+  const colonParts = str.split(':').map(Number)
+  if (colonParts.length >= 2 && colonParts.every((n) => !isNaN(n))) {
+    if (colonParts.length === 3) {
+      const [h, m, s] = colonParts
+      return h * 3600 + m * 60 + s
+    }
+    if (colonParts.length === 2) {
+      const [m, s] = colonParts
+      return m * 60 + s
+    }
+  }
+
+  return null
 }

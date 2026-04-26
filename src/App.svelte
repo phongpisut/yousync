@@ -12,6 +12,7 @@
     now,
     getTarget,
     extractYouTubeId,
+    parseYouTubeTime,
   } from './lib/sync.ts'
 
   // Phases: setup | creating | countdown | watching
@@ -20,9 +21,12 @@
   let baseOffset = $state(0)
   let isLive = $state(false)
   let videoId = $state(null)
+  let buffer = $state(0)
+  let videoStartInput = $state('')
+  let createBuffer = $state(2)
   let shareHash = $derived.by(() => {
     if (videoId && seed != null && baseOffset != null) {
-      return buildShareHash({ videoId, seed, offset: baseOffset.toFixed(1), isLive })
+      return buildShareHash({ videoId, seed, offset: baseOffset.toFixed(1), isLive, buffer })
     }
     return ''
   })
@@ -46,7 +50,7 @@
     if (seed == null) return 0
     const p = getPlayer()
     const dur = p && typeof p.getDuration === 'function' ? p.getDuration() : 0
-    return getTarget({ seed, baseOffset, isLive, getDuration: () => dur })
+    return getTarget({ seed, baseOffset, isLive, getDuration: () => dur, buffer })
   }
 
   function syncLoop() {
@@ -106,10 +110,31 @@
     const offset = p && typeof p.getCurrentTime === 'function' ? p.getCurrentTime() : 0
     seed = s
     baseOffset = offset
-    const hash = buildShareHash({ videoId, seed, offset: baseOffset.toFixed(1), isLive })
+    buffer = 0
+    const hash = buildShareHash({ videoId, seed, offset: baseOffset.toFixed(1), isLive, buffer })
     location.hash = hash
     phase = 'watching'
     startSyncLoop()
+  }
+
+  function doCreateSeedFromTime() {
+    const parsed = parseYouTubeTime(videoStartInput)
+    if (parsed == null) return
+    const p = getPlayer()
+    if (p && typeof p.seekTo === 'function') {
+      p.seekTo(parsed, true)
+    }
+    seed = now()
+    baseOffset = parsed
+    buffer = createBuffer
+    isLive = false
+    const hash = buildShareHash({ videoId, seed, offset: baseOffset.toFixed(1), isLive, buffer })
+    location.hash = hash
+    phase = 'watching'
+    tick().then(() => {
+      forceResync()
+      startSyncLoop()
+    })
   }
 
   // Start creating flow: load video, wait for user to click Start Sync
@@ -120,11 +145,12 @@
   }
 
   // Join existing seed from parsed hash
-  function startJoin(videoIdFromHash, s, o, liveFlag) {
+  function startJoin(videoIdFromHash, s, o, liveFlag, buf = 0) {
     videoId = videoIdFromHash
     seed = s
     baseOffset = o ?? 0
     isLive = liveFlag
+    buffer = buf
     if (now() < seed) {
       phase = 'countdown'
     } else {
@@ -139,6 +165,12 @@
   function onCountdownDone() {
     phase = 'watching'
     tick().then(() => {
+      const p = getPlayer()
+      if (p && typeof p.playVideo === 'function') {
+        try {
+          p.playVideo()
+        } catch (e) {}
+      }
       forceResync()
       startSyncLoop()
     })
@@ -153,8 +185,9 @@
       const s = hashParams.has('s') ? parseInt(hashParams.get('s'), 10) : null
       const o = hashParams.has('o') ? parseFloat(hashParams.get('o')) : null
       const l = hashParams.has('l')
+      const b = hashParams.has('b') ? parseFloat(hashParams.get('b')) : 0
       if (v && s != null && o != null) {
-        startJoin(v, s, o, l)
+        startJoin(v, s, o, l, b)
         return
       }
     } catch {
@@ -164,7 +197,7 @@
     // Otherwise, try page hash
     const h = parseHash()
     if (h.videoId && h.seed != null && h.offset != null) {
-      startJoin(h.videoId, h.seed, h.offset, h.isLive)
+      startJoin(h.videoId, h.seed, h.offset, h.isLive, h.buffer)
       return
     }
 
@@ -189,7 +222,7 @@
     await calibrateTime()
     const h = parseHash()
     if (h.videoId && h.seed != null && h.offset != null) {
-      startJoin(h.videoId, h.seed, h.offset, h.isLive)
+      startJoin(h.videoId, h.seed, h.offset, h.isLive, h.buffer)
     }
     document.addEventListener('visibilitychange', onVisibility)
   })
@@ -197,6 +230,17 @@
   onDestroy(() => {
     stopSyncLoop()
     document.removeEventListener('visibilitychange', onVisibility)
+  })
+
+  $effect(() => {
+    if (phase === 'countdown') {
+      const p = getPlayer()
+      if (p && typeof p.pauseVideo === 'function') {
+        try {
+          p.pauseVideo()
+        } catch (e) {}
+      }
+    }
   })
 
 
@@ -214,13 +258,31 @@
             {videoId}
             startTime={phase === 'watching' ? getTargetTime() : 0}
             {isLive}
+            autoplay={phase === 'countdown' ? 0 : 1}
           />
         {/if}
 
         {#if phase === 'creating'}
           <div class="create-overlay">
             <button class="primary big" onclick={doCaptureSeed}>Start Sync From Here</button>
-            <p class="sub">Seek to where you want the group to start, then click the button.</p>
+            <p class="sub">Uses the current player position and starts now.</p>
+
+            <div class="divider">or</div>
+
+            <p class="sub">Set a video starting point:</p>
+            <input
+              type="text"
+              bind:value={videoStartInput}
+              placeholder="e.g. 02:03"
+            />
+            <div class="buffer-row">
+              <label for="buffer-input">Buffer (seconds)</label>
+              <input id="buffer-input" type="number" bind:value={createBuffer} min="0" max="60" step="1" />
+            </div>
+            <button class="primary big" onclick={doCreateSeedFromTime} disabled={!videoStartInput.trim()}>
+              Create Sync Link
+            </button>
+            <p class="sub">Seeks to that moment and starts everyone from now.</p>
           </div>
         {/if}
 
@@ -289,6 +351,39 @@
     font-size: 0.85rem;
     opacity: 0.8;
     max-width: 320px;
+    text-align: center;
+  }
+
+  .create-overlay .divider {
+    margin: 0.25rem 0;
+    font-size: 0.8rem;
+    opacity: 0.5;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .create-overlay input[type="text"] {
+    max-width: 320px;
+    text-align: center;
+  }
+
+  .buffer-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    max-width: 260px;
+    justify-content: center;
+  }
+
+  .buffer-row label {
+    font-size: 0.85rem;
+    opacity: 0.9;
+    white-space: nowrap;
+  }
+
+  .buffer-row input {
+    width: 60px;
     text-align: center;
   }
 

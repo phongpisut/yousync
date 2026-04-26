@@ -56,7 +56,9 @@ button.primary:hover {
   background: #4ff0e6;
 }
 
-input[type="text"] {
+input[type="text"],
+input[type="time"],
+input[type="number"] {
   width: 100%;
   padding: 0.6rem 0.8rem;
   border-radius: 0.4rem;
@@ -64,8 +66,11 @@ input[type="text"] {
   background: #121820;
   color: white;
   outline: none;
+  font: inherit;
 }
 
-input[type="text"]:focus {
+input[type="text"]:focus,
+input[type="time"]:focus,
+input[type="number"]:focus {
   border-color: var(--accent);
 }
